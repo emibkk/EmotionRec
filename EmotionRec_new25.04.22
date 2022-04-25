@@ -1,0 +1,202 @@
+########### Import Modules ##############
+
+import numpy as np
+import matplotlib.pyplot as plt
+import skimage.io
+import tensorflow as tf
+import tensorflow_addons as tfa
+from tensorflow.keras.preprocessing.image import ImageDataGenerator
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Dense, Flatten, Dropout, BatchNormalization, Activation
+from tensorflow.keras.callbacks import ReduceLROnPlateau, ModelCheckpoint, EarlyStopping
+from PIL import Image
+
+# load the image
+im = Image.open('C:/data/train/angry/Training_33331.jpg')
+# summarize some details about the image
+print(im.format)
+print(im.mode)
+print(im.size)
+# show the image
+im.show()
+# Datagen to manipulate the image data after it is loaded, including pixel scaling and data augmentation.
+#Followed from source: https://machinelearningmastery.com/how-to-configure-image-data-augmentation-when-training-deep-learning-neural-networks/
+train_datagen = ImageDataGenerator(rescale=1. / 255,
+                                   validation_split=0.2,
+                                   rotation_range=5,
+                                   width_shift_range=0.2,
+                                   height_shift_range=0.2,
+                                   shear_range=0.2,
+                                   horizontal_flip=True,
+                                   #vertical_flip=True,
+                                   fill_mode='nearest')
+
+valid_datagen = ImageDataGenerator(rescale=1. / 255,
+                                   validation_split=0.2)
+
+test_datagen = ImageDataGenerator(rescale=1. / 255
+                                  )
+
+train_dataset = train_datagen.flow_from_directory(directory = 'C:/data/train',
+                                                   target_size = (48,48),
+                                                   class_mode = 'categorical',
+                                                   subset = 'training',
+                                                   batch_size = 16)
+
+valid_dataset = valid_datagen.flow_from_directory(directory = 'C:/data/train',
+                                                  target_size = (48,48),
+                                                  class_mode = 'categorical',
+                                                  subset = 'validation',
+                                                  batch_size = 16)
+
+test_dataset = test_datagen.flow_from_directory(directory = 'C:/data/test',
+                                                  target_size = (48,48),
+                                                  class_mode = 'categorical',
+                                                  batch_size = 16)
+
+
+# Verify generator by plotting a face and printing corresponding label
+# Returning batches of image samples
+img, label = train_dataset.__next__()
+
+class_labels = ['Angry', 'Disgust', 'Fear', 'Happy', 'Neutral', 'Sad', 'Surprise']
+
+# Show sample image and label
+image = img[1]
+labl = class_labels[label[1].argmax()]
+plt.imshow(image[:, :, 0], cmap='gray')
+plt.title(labl)
+plt.show()
+
+# Download the architecture of ResNet50 with ImageNet weights
+base_model = tf.keras.applications.ResNet50(input_shape=(48,48,3),include_top=False,weights="imagenet")
+
+# Training only top layers i.e. the layers which we have added in the end
+for layer in base_model.layers[:-4]:
+    layer.trainable=False
+
+############# Build Model ##################
+# Building Model
+
+model=Sequential()
+model.add(base_model)
+model.add(Dropout(0.5))
+model.add(Flatten())
+model.add(BatchNormalization())
+model.add(Dense(32,kernel_initializer='he_uniform'))
+model.add(BatchNormalization())
+model.add(Activation('relu'))
+model.add(Dropout(0.5))
+model.add(Dense(32,kernel_initializer='he_uniform'))
+model.add(BatchNormalization())
+model.add(Activation('relu'))
+model.add(Dropout(0.5))
+model.add(Dense(32,kernel_initializer='he_uniform'))
+model.add(BatchNormalization())
+model.add(Activation('relu'))
+model.add(Dense(7,activation='softmax'))
+
+# Display the model's architecture
+model.summary()
+
+METRICS = [
+    tf.keras.metrics.BinaryAccuracy(name='accuracy'),
+    tf.keras.metrics.Precision(name='precision'),
+    tf.keras.metrics.Recall(name='recall'),
+    tf.keras.metrics.AUC(name='auc'),
+    tfa.metrics.F1Score(num_classes=7, name='f1_score'),
+]
+
+lrd = ReduceLROnPlateau(monitor='val_loss', patience=20, verbose=1, factor=0.50, min_lr=1e-10)
+
+mcp = ModelCheckpoint('model.h5')
+
+es = EarlyStopping(verbose=1, patience=20)
+
+model.compile(optimizer='Adam', loss='categorical_crossentropy', metrics=METRICS)
+
+history = model.fit(train_dataset, validation_data=valid_dataset, epochs=2, batch_size=16, verbose=1, callbacks=[lrd, mcp, es])
+
+#score = f1_score()
+#print('F-Measure: %.3f' % score)
+#model.save('saved_model.h5')
+
+######## Plot results ########
+fig, (plt1, plt2, plt3, plt4, plt5) = plt.subplots(1, 5, figsize=(20, 5))
+fig.suptitle(" MODEL'S METRICS VISUALIZATION ")
+
+# Plot training & validation accuracy values
+plt1.plot(history.history['accuracy'])
+plt1.plot(history.history['val_accuracy'])
+plt1.set_title('Model accuracy')
+plt1.set_ylabel('Accuracy')
+plt1.set_xlabel('Epoch')
+plt1.legend(['Train', 'Test'], loc='upper left')
+
+plt2.plot(history.history['loss'])
+plt2.plot(history.history['val_loss'])
+plt2.set_title('Model loss')
+plt2.set_ylabel('Loss')
+plt2.set_xlabel('Epoch')
+plt2.legend(['Train', 'Test'], loc='upper left')
+
+plt3.plot(history.history['precision'])
+plt3.plot(history.history['val_precision'])
+plt3.set_title('Model precision')
+plt3.set_ylabel('Precision')
+plt3.set_xlabel('Epoch')
+plt3.legend(['Train', 'Test'], loc='upper left')
+
+plt4.plot(history.history['recall'])
+plt4.plot(history.history['val_recall'])
+plt4.set_title('Model recall')
+plt4.set_ylabel('Recall')
+plt4.set_xlabel('Epoch')
+plt4.legend(['Train', 'Test'], loc='upper left')
+
+plt5.plot(history.history['f1_score'])
+plt5.plot(history.history['val_f1_score'])
+plt5.set_title('Model F1 score')
+plt5.set_ylabel('F1 score')
+plt5.set_xlabel('Epoch')
+plt5.legend(['Train', 'Test'], loc='upper left')
+
+plt.show()
+
+from tensorflow.keras.models import load_model
+
+model.save('fer_model_v01.h5')
+
+# Test the model
+my_model = load_model('fer_model_v01.h5', compile=False)
+
+# Generate a batch of images
+test_img, test_lbl = test_dataset.__next__()
+predictions = my_model.predict(test_img)
+
+predictions = np.argmax(predictions, axis=1)
+test_labels = np.argmax(test_lbl, axis=1)
+
+from sklearn import metrics
+
+print("Accuracy = ", metrics.accuracy_score(test_labels, predictions))
+
+# Confusion Matrix - verify accuracy of each class
+from sklearn.metrics import confusion_matrix
+
+cf_matrix = confusion_matrix(test_labels, predictions)
+print(cf_matrix)
+
+import seaborn as sns
+
+sns.heatmap(cf_matrix, annot=True)
+
+# Check results on a few select images
+import random
+n = random.randint(0, test_img.shape[0] - 1)
+image = test_img[n]
+#orig_labl = class_labels[test_labels[n]]
+#pred_labl = class_labels[predictions[n]]
+#plt.imshow(image[:, :, 0], cmap='gray')
+#plt.title("Original label is: " + orig_labl + " Predicted is: " + pred_labl)
+plt.show()
