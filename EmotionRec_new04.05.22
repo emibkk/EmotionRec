@@ -1,0 +1,290 @@
+########### Import Modules ##############
+import pathlib
+import numpy as np
+import itertools
+import matplotlib.pyplot as plt
+import skimage.io
+import tensorflow as tf
+import tensorflow_addons as tfa
+from tensorflow.keras.preprocessing import image_dataset_from_directory
+from tensorflow.keras.preprocessing.image import ImageDataGenerator, array_to_img, img_to_array, load_img
+from tensorflow.keras.models import Sequential, load_model
+from tensorflow.keras.layers import Dense, Flatten, Dropout, BatchNormalization, Activation, Conv2D, MaxPooling2D
+from tensorflow.keras.callbacks import ReduceLROnPlateau, ModelCheckpoint, EarlyStopping
+from tensorflow.python.keras import regularizers
+from tensorflow.keras.utils import plot_model
+from sklearn.metrics import accuracy_score
+import os
+import pandas as pd
+os.environ["PATH"] += os.pathsep + 'C:/Program Files/Graphviz/bin/'
+
+####### Importing and analyzing dataset ##########
+path_test= 'C:/data/test'
+path_train= 'C:/data/train'
+data_dir_test = pathlib.Path(path_test)
+data_dir_train = pathlib.Path(path_train)
+image_count_test = len(list(data_dir_test.glob('*/*.jpg')))
+image_count_train = len(list(data_dir_train.glob('*/*.jpg')))
+print("Image count test folder: ", image_count_test)
+print("Image count train folder: ", image_count_train)
+
+
+#list = os.listdir(path_train) # dir is your directory path
+#number_files = len(list)
+#print(number_files)
+
+def count_exp(path, set_):
+    dict_ = {}
+    for expression in os.listdir(path):
+        dir_ = path + '/' + expression
+        dict_[expression] = len(os.listdir(dir_))
+    df = pd.DataFrame(dict_, index=[set_])
+    return df
+train_count = count_exp(path_train, 'train')
+test_count = count_exp(path_test, 'test')
+print(train_count)
+print(test_count)
+import matplotlib.pyplot as plt
+train_count.transpose().plot(kind='bar')
+test_count.transpose().plot(kind='bar')
+plt.show()
+
+
+# load an example image
+im = load_img('C:/data/train/angry/Training_33331.jpg')
+
+# summarize some details about the image
+print("Image format: ", im.format)
+print("Image mode: ", im.mode)
+print("Image size: ", im.size)
+
+batch_size = 64
+# Datagen to manipulate the image data after it is loaded, including pixel scaling and data augmentation.
+#Followed from source: https://machinelearningmastery.com/how-to-configure-image-data-augmentation-when-training-deep-learning-neural-networks/
+#Train
+train_datagen = ImageDataGenerator(rescale=1. / 255,
+                                   validation_split=0.2,
+                                   rotation_range=30,
+                                   shear_range=0.3,
+                                   horizontal_flip=True,
+                                   zoom_range=0.3,
+                                   fill_mode='nearest')
+
+train_dataset = train_datagen.flow_from_directory(directory = 'C:/data/train',
+                                                  target_size = (48,48),
+                                                  class_mode = 'categorical',
+                                                  subset = 'training',
+                                                  shuffle=True,
+                                                  #seed=13,
+                                                  color_mode='grayscale',
+                                                  batch_size = batch_size)
+#Validation
+valid_datagen = ImageDataGenerator(rescale=1. / 255,
+                                   validation_split=0.2
+                                  )
+valid_dataset = valid_datagen.flow_from_directory(directory = 'C:/data/train',
+                                                target_size = (48,48),
+                                                class_mode = 'categorical',
+                                                shuffle=True,
+                                                #seed=13,
+                                                color_mode='grayscale',
+                                                subset = 'validation',
+                                                batch_size = batch_size)
+#Test without data augumentation
+test_datagen = ImageDataGenerator(rescale=1. / 255
+                                  )
+
+test_dataset = test_datagen.flow_from_directory(directory = 'C:/data/test',
+                                                target_size = (48,48),
+                                                shuffle=False,
+                                                batch_size = batch_size,
+                                                class_mode = 'categorical',
+                                                color_mode='grayscale'
+                                                )
+
+#https://towardsdatascience.com/image-data-generators-in-keras-7c5fc6928400
+print(train_dataset.class_indices)
+x, y = next(train_dataset)
+print(type(x))
+print(type(y))
+print(x.shape)
+print(y.shape)
+
+######################### Define Model ###########################
+#Define metrics
+METRICS = [
+    tf.keras.metrics.BinaryAccuracy(name='accuracy'),
+    tf.keras.metrics.Precision(name='precision'),
+    tf.keras.metrics.Recall(name='recall'),
+    tf.keras.metrics.AUC(name='auc'),
+    tfa.metrics.F1Score(num_classes=7, name='f1_score', average='macro'),
+]
+
+# Initialising the CNN
+model = Sequential()
+
+model.add(Conv2D(32, kernel_size=(3, 3), padding='same', activation='relu', input_shape=(48, 48, 1)))
+model.add(Conv2D(64, kernel_size=(3, 3), activation='relu', padding='same'))
+model.add(BatchNormalization())
+model.add(MaxPooling2D(pool_size=(2, 2)))
+model.add(Dropout(0.25))
+
+model.add(Conv2D(128, kernel_size=(3, 3), activation='relu', padding='same', kernel_regularizer=regularizers.l2(0.01)))
+model.add(BatchNormalization())
+model.add(MaxPooling2D(pool_size=(2, 2)))
+model.add(Dropout(0.25))
+
+model.add(Conv2D(256, kernel_size=(3, 3), activation='relu', kernel_regularizer=regularizers.l2(0.01)))
+model.add(BatchNormalization())
+model.add(MaxPooling2D(pool_size=(2, 2)))
+model.add(Dropout(0.25))
+
+model.add(Flatten())
+model.add(Dense(512, activation='relu'))
+model.add(Dropout(0.5))
+
+model.add(Dense(7, activation='softmax'))
+
+# Compiling model
+model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=METRICS)
+
+# Display the model's architecture and summarize model.
+model.summary()
+plot_model(model, to_file='model.png', show_shapes=True, show_layer_names=True)
+
+
+
+############ Callbacks function ############
+lrd = ReduceLROnPlateau(monitor='val_loss', patience=20, verbose=1, factor=0.50, min_lr=1e-10)
+
+mcp = ModelCheckpoint('model.h5')
+
+es = EarlyStopping(verbose=1, patience=20)
+
+
+# Fit the model
+steps_per_epoch = train_dataset.n // train_dataset.batch_size
+validation_steps = valid_dataset.n // valid_dataset.batch_size
+test_steps = test_dataset.n // test_dataset.batch_size
+
+history = model.fit(train_dataset,
+                 validation_data=valid_dataset,
+                 epochs=150,
+                 callbacks=[lrd, mcp, es],
+                 steps_per_epoch=steps_per_epoch,
+                 batch_size=batch_size,
+                 validation_steps=validation_steps)
+
+
+# Evaluate model
+train_score = model.evaluate(train_dataset, batch_size=batch_size)
+print("Train Accuracy: {:.2f}%".format(train_score[1] * 100))
+print("Train Loss: ", train_score[0])
+
+valid_score = model.evaluate(valid_dataset, batch_size=batch_size)
+print("Validation Accuracy: {:.2f}%".format(valid_score[1] * 100))
+print("Validation Loss: ", valid_score[0])
+
+#Save weights
+model.save_weights('model_1_bestweight.h5')
+model.save('best_model.h5')
+
+############# Loss and Accuracy Plot ################
+plt.figure(figsize=(14,5))
+plt.subplot(1,5,1)
+plt.plot(history.history['accuracy'])
+plt.plot(history.history['val_accuracy'])
+plt.title('Model Accuracy')
+plt.xlabel('Epochs')
+plt.ylabel('Accuracy')
+plt.legend(['train', 'test'], loc='upper left')
+
+plt.subplot(1,5,2)
+plt.plot(history.history['loss'])
+plt.plot(history.history['val_loss'])
+plt.title('model Loss')
+plt.xlabel('Epochs')
+plt.ylabel('Loss')
+plt.legend(['train', 'test'], loc='upper left')
+
+plt.subplot(1,5,3)
+plt.plot(history.history['precision'])
+plt.plot(history.history['val_precision'])
+plt.title('Model precision')
+plt.ylabel('Precision')
+plt.xlabel('Epoch')
+plt.legend(['Train', 'Test'], loc='upper left')
+
+plt.subplot(1,5,4)
+plt.plot(history.history['recall'])
+plt.plot(history.history['val_recall'])
+plt.title('Model recall')
+plt.ylabel('Recall')
+plt.xlabel('Epoch')
+plt.legend(['Train', 'Test'], loc='upper left')
+
+plt.subplot(1,5,5)
+plt.plot(history.history['f1_score'])
+plt.plot(history.history['val_f1_score'])
+plt.title('Model F1 score')
+plt.ylabel('F1 score')
+plt.xlabel('Epoch')
+plt.legend(['Train', 'Test'], loc='upper left')
+plt.show()
+
+########################## Confusion Matrix #############
+#Plot the confusion matrix. Set Normalize = True/False
+
+def plot_confusion_matrix(cm, classes, normalize=True, title='Confusion matrix', cmap=plt.cm.Blues):
+    """
+    This function prints and plots the confusion matrix. From https://scikit-learn.org/0.20/auto_examples/model_selection/plot_confusion_matrix.html
+    Normalization can be applied by setting `normalize=True`.
+    """
+    plt.figure(figsize=(5,7))
+
+    plt.imshow(cm, interpolation='nearest', cmap=cmap)
+    plt.title(title)
+    plt.colorbar()
+
+    tick_marks = np.arange(len(classes))
+    plt.xticks(tick_marks, classes, rotation=45)
+    plt.yticks(tick_marks, classes)
+
+    if normalize:
+        cm = cm.astype('float') / cm.sum(axis=1)[:, np.newaxis]
+        cm = np.around(cm, decimals=2)
+        cm[np.isnan(cm)] = 0.0
+        print("Normalized confusion matrix")
+    else:
+        print('Confusion matrix, without normalization')
+    thresh = cm.max() / 2.
+    for i, j in itertools.product(range(cm.shape[0]), range(cm.shape[1])):
+        plt.text(j, i, cm[i, j],
+                 horizontalalignment="center",
+                 color="white" if cm[i, j] > thresh else "black")
+    plt.tight_layout()
+    plt.ylabel('True label')
+    plt.xlabel('Predicted label')
+    plt.show()
+
+from sklearn.metrics import classification_report, confusion_matrix
+import itertools
+#shuffle=False
+
+target_names = []
+for key in train_dataset.class_indices:
+    target_names.append(key)
+
+mymodel = load_model('best_model.h5')
+
+#Confusion Matrix
+
+Y_pred = mymodel.predict(test_dataset)
+y_pred = np.argmax(Y_pred, axis=1)
+print('Confusion Matrix')
+cm = confusion_matrix(test_dataset.classes, y_pred)
+plot_confusion_matrix(cm, target_names, title='Confusion Matrix')
+
+#Print Classification Report
+print('Classification Report')
+print(classification_report(test_dataset.classes, y_pred, target_names=target_names))
