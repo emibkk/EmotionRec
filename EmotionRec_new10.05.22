@@ -101,21 +101,6 @@ def develop_piechart():
     plt.clf()
     plt.pie(category_count, labels=('Happy', 'Neutral', 'Sad' , 'Fear', 'Angry', 'Surprise', 'Disgust'));
 
-    # Plot bar showing amount of data from Acc or Gyr or Other
-    acc = 0
-    gyro = 0
-    others = 0
-    for column in training_data.columns:
-        if "Acc" in str(column):
-            acc += 1
-        elif "Gyro" in str(column):
-            gyro += 1
-        else:
-            others += 1
-
-    plt.figure(figsize=(12, 8))
-    plt.bar(['Accelerometer', 'Gyrometer', 'Others'], [acc, gyro, others], color=['c', 'm', 'y']);
-
 ############ Callbacks function ############
 lrd = ReduceLROnPlateau(monitor='val_loss', patience=20, verbose=1, factor=0.50, min_lr=1e-10)
 
