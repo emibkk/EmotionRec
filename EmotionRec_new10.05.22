@@ -1,0 +1,314 @@
+########### Installing Dependencies ##############
+# Libraries for linear algebra, data processing, data plotting
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+
+# Libraries for tensorflow
+import tensorflow as tf
+import tensorflow_addons as tfa
+from tensorflow import keras
+from tensorflow.keras import layers
+from tensorflow.python.keras import regularizers
+from tensorflow.keras.callbacks import ReduceLROnPlateau, ModelCheckpoint, EarlyStopping
+
+# Libraries using sklearn
+from sklearn.metrics import confusion_matrix, classification_report, ConfusionMatrixDisplay
+from sklearn.model_selection import KFold
+
+# Libraries using keras
+from keras.utils import np_utils
+from keras.models import Sequential
+from keras.layers import Dense, Dropout, Activation, Flatten
+from keras.layers import Conv2D, MaxPooling2D, BatchNormalization , Input ,concatenate
+from keras.losses import categorical_crossentropy,categorical_hinge,hinge,squared_hinge
+from keras.models import Model
+from keras.regularizers import l2
+from keras.callbacks import  EarlyStopping, ModelCheckpoint
+from keras.preprocessing.image import ImageDataGenerator
+
+####################### Preparing data ######################
+# Create path to dataset
+path='C:/data3/fer2013.csv'
+# Load the dataset
+data=pd.read_csv(path)
+# Look at 5 first rows and corresponding columns
+print(data.head())
+# More about the dataset
+print(data['Usage'].value_counts())
+
+# Defining the emotions
+classes = ['angry', 'disgust', 'fear', 'happy', 'neutral', 'sad', 'surprise']
+emotions = {0: 'Angry', 1: 'Disgust', 2: 'Fear', 3: 'Happy', 4: 'Sad', 5: 'Surprise', 6: 'Neutral'}
+
+####################### Training, Testing and Validation Split ######################
+# Define train images to be the ones under 'Usage' Training
+train_data = data.loc[data.Usage=="Training"]
+# Define validation images to be the ones under 'Usage' PublicTest
+val_data = data.loc[data.Usage=="PublicTest"]
+# Define test images to be the ones under 'Usage' PrivateTest
+test_data = data.loc[data.Usage=="PrivateTest"]
+
+# Combining validation and test data to be test dataset
+test_data = pd.concat([test_data,val_data])
+
+# Convert images to an nparray and 32-bit floating number. Extract only data, without labels
+X_train = np.array(list(map(str.split, train_data.pixels)), np.float32)
+X_test = np.array(list(map(str.split, test_data.pixels)), np.float32)
+
+# Converting to One-hot encoding
+X_train = X_train.reshape(X_train.shape[0], 48, 48, 1)
+X_test = X_test.reshape(X_test.shape[0], 48, 48, 1)
+
+# Normalizing
+X_train=X_train/255 # Can also be called train images, without corresponding labels
+X_test=X_test/255 # Can also be called test images, without corresponding labels
+
+# Extracting only labels not containing data
+y_train = train_data.emotion # Can also be called train labels, without corresponding data
+y_test = test_data.emotion # Can also be called test labels, without corresponding data
+
+# Converiting to One-hot encoding
+y_train = np_utils.to_categorical(y_train, 7)
+y_test = np_utils.to_categorical(y_test, 7)
+
+# Look at the final formatted data
+print(f"X_train shape: {X_train.shape} - y_train shape: {y_train.shape}")
+print(f"X_test shape: {X_test.shape} - y_test shape: {y_test.shape}")
+
+def plot_emotions():
+    fig, axis = plt.subplots(1, 7, figsize=(30, 12))
+    fig.subplots_adjust(hspace = .2, wspace=.2)
+    axis = axis.ravel()
+    for j in range(7):
+        number = data[data['emotion']==j].index[j]
+        axis[j].imshow(X_train[number][:,:,0], cmap='gray')
+        axis[j].set_title(emotions[y_train[number].argmax()])
+        axis[j].set_xticklabels([])
+        axis[j].set_yticklabels([])
+
+plot_emotions()
+
+def develop_piechart():
+    # Developing PieChart
+    category_count = data['emotion'].value_counts()
+    emotion = (data['emotion'].unique()) #sorted
+    #data['emotion'].value_counts().sort_values
+    #data.groupby(['emotion']).sum().plot(kind='pie', y=category_count)
+
+    # Creating PieChart
+    plt.figure(figsize=(12, 7))
+    plt.clf()
+    plt.pie(category_count, labels=('Happy', 'Neutral', 'Sad' , 'Fear', 'Angry', 'Surprise', 'Disgust'));
+
+    # Plot bar showing amount of data from Acc or Gyr or Other
+    acc = 0
+    gyro = 0
+    others = 0
+    for column in training_data.columns:
+        if "Acc" in str(column):
+            acc += 1
+        elif "Gyro" in str(column):
+            gyro += 1
+        else:
+            others += 1
+
+    plt.figure(figsize=(12, 8))
+    plt.bar(['Accelerometer', 'Gyrometer', 'Others'], [acc, gyro, others], color=['c', 'm', 'y']);
+
+############ Callbacks function ############
+lrd = ReduceLROnPlateau(monitor='val_loss', patience=20, verbose=1, factor=0.50, min_lr=1e-10)
+
+mcp = ModelCheckpoint('model.h5')
+
+es = EarlyStopping(verbose=1, patience=20)
+
+#from sklearn.model_selection import KFold
+#from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
+
+METRICS = [
+    tf.keras.metrics.BinaryAccuracy(name='accuracy'),
+    tf.keras.metrics.Precision(name='precision'),
+    tf.keras.metrics.Recall(name='recall'),
+    tf.keras.metrics.AUC(name='auc'),
+    tfa.metrics.F1Score(num_classes=7, name='f1_score', average='macro'),
+]
+
+def resnet_model():
+    #from: https://chroniclesofai.com/transfer-learning-with-keras-resnet-50/
+    model = Sequential()
+
+    pretrained_model = tf.keras.applications.ResNet50(weights='imagenet', include_top=False,
+                     input_tensor=Input(shape=(48, 48, 3)))
+
+    for layer in pretrained_model.layers:
+        layer.trainable = False
+
+    model.add(pretrained_model)
+    model.add(Flatten())
+    model.add(Dense(512, activation='relu'))
+    model.add(Dense(5, activation='softmax'))
+
+    model.summary()
+    return model
+
+def inception_model():
+    #from: https://www.analyticsvidhya.com/blog/2021/10/understanding-transfer-learning-for-deep-learning/
+    #and https://medium.com/analytics-vidhya/transfer-learning-using-inception-v3-for-image-classification-86700411251b
+    pretrained_model = tf.keras.applications.InceptionV3(weights='imagenet', include_top=False, input_shape=(48, 48, 3))
+
+    # The last 15 layers fine tune
+    for layer in pretrained_model.layers:
+        layer.trainable = False
+
+    x = pretrained_model.output
+    x = GlobalAveragePooling2D()(x)
+    x = Flatten()(x)
+    x = Dense(units=512, activation='relu')(x)
+    x = Dropout(0.3)(x)
+    x = Dense(units=512, activation='relu')(x)
+    x = Dropout(0.3)(x)
+    output = Dense(units=4, activation='softmax')(x)
+    model = Model(pretrained_model.input, output)
+
+    model.summary()
+    return model
+
+def CNN_model():
+    model = Sequential()
+    model.add(Conv2D(32, kernel_size=(3, 3), padding='same', activation='relu', input_shape=(48, 48, 1)))
+    model.add(Conv2D(64, kernel_size=(3, 3), activation='relu', padding='same'))
+    model.add(BatchNormalization())
+    model.add(MaxPooling2D(pool_size=(2, 2)))
+    model.add(Dropout(0.25))
+
+    model.add(
+        Conv2D(128, kernel_size=(3, 3), activation='relu', padding='same', kernel_regularizer=regularizers.l2(0.01)))
+    model.add(BatchNormalization())
+    model.add(MaxPooling2D(pool_size=(2, 2)))
+    model.add(Dropout(0.25))
+
+    model.add(Conv2D(256, kernel_size=(3, 3), activation='relu', kernel_regularizer=regularizers.l2(0.01)))
+    model.add(BatchNormalization())
+    model.add(MaxPooling2D(pool_size=(2, 2)))
+    model.add(Dropout(0.25))
+
+    model.add(Flatten())
+    model.add(Dense(512, activation='relu'))
+    model.add(Dropout(0.5))
+
+    model.add(Dense(7, activation='softmax'))
+
+    # Display the model's architecture and summarize model.
+    model.summary()
+    return model
+
+
+# Define per-fold score containers
+acc_per_fold = []
+loss_per_fold = []
+# Merge inputs and targets
+inputs = np.concatenate((X_train, X_test), axis=0)
+targets = np.concatenate((y_train, y_test), axis=0)
+
+# Define the K-fold Cross Validator
+kfold = KFold(n_splits=5, shuffle=True)
+
+# K-fold Cross Validation model evaluation
+fold_no = 0
+for train, test in kfold.split(inputs, targets):
+    model = inception_model() #call on CNN_model(), resnet_model() or inception_model()
+
+    model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=METRICS)
+    # Generate a print
+    print('------------------------------------------------------------------------')
+    print(f'Training for fold {fold_no} ...')
+
+    #steps_per_epoch = train_dataset.n // train_dataset.batch_size
+    #validation_steps = valid_dataset.n // valid_dataset.batch_size
+
+    # Fit data to model
+    history = model.fit(inputs[train], targets[train],
+                        batch_size=128,
+                        callbacks=[lrd, mcp, es],
+                        epochs=50,
+                        validation_data=(inputs[test], targets[test]),                              #eller inputs[test], targets[test]/ X_test, y_test
+                        verbose=1)
+
+    plt.figure(figsize=(5, 5))
+    plt.subplot(1, 2, 1)
+    plt.plot(history.history["accuracy"], label="train_accuracy")
+    plt.plot(history.history["val_accuracy"], label="val_accuracy")
+    plt.xlabel("Epochs")
+    plt.ylabel("Accuracy")
+    plt.title("Train and Validation accuracy Over Epochs", fontsize=14)
+    plt.legend()
+    plt.grid()
+
+    plt.subplot(1, 2, 2)
+    plt.plot(history.history["loss"], label="train_loss")
+    plt.plot(history.history["val_loss"], label="val_loss")
+    plt.xlabel("Epochs")
+    plt.ylabel("Loss")
+    plt.title("Train and Validation loss Over Epochs", fontsize=14)
+    plt.legend()
+    plt.grid()
+    plt.show()
+
+    # Generate generalization metrics
+    scores = model.evaluate(inputs[test], targets[test], verbose=0)
+
+    print(
+        f'Score for fold {fold_no}: {model.metrics_names[0]} of {scores[0]}; {model.metrics_names[1]} of {scores[1] * 100}%')
+    loss_per_fold.append(scores[0])
+    acc_per_fold.append(scores[1] * 100)
+    results = model.predict(inputs[test], batch_size=128)
+    predicted_classes = np.argmax(results, axis=1)
+    y_classes = np.argmax(targets[test], axis=1)
+    cm = confusion_matrix(y_classes, predicted_classes, normalize='true')
+    disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=classes)
+    disp.plot()
+    plt.show()
+
+    # Increase fold number
+    fold_no = fold_no + 1
+
+model.save_weights('New4_bestweight.h5')
+model.save('New4_bestmodel.h5')
+
+# == Provide average scores == #
+print('------------------------------------------------------------------------')
+print('Score per fold')
+for i in range(0, len(acc_per_fold)):
+    print('------------------------------------------------------------------------')
+    print(f'> Fold {i + 1} - Loss: {loss_per_fold[i]} - Accuracy: {acc_per_fold[i]}%')
+    print('------------------------------------------------------------------------')
+
+print('Average scores for all folds:')
+print(f'> Accuracy: {np.mean(acc_per_fold)} (+- {np.std(acc_per_fold)})')
+print(f'> Loss: {np.mean(loss_per_fold)}')
+print('------------------------------------------------------------------------')
+
+#Print Classification Report
+print('Classification Report')
+print(classification_report(y_classes, predicted_classes, target_names=classes))
+
+
+
+# repeated evaluation of a standalone model
+def eval_standalone_model(X_train, y_train, X_test, y_test, n_repeats):
+    acc_per_fold = []
+    loss_per_fold = []
+    for _ in range(n_repeats):
+        # define and fit a new model on the train dataset
+        model = model.fit(X_train, y_train)
+        # evaluate model on test dataset
+        test_acc = model.evaluate(inputs[test], targets[test], verbose=0) #eller X_test, y_test
+        print(
+            f'Score for evaluated standalone model: {model.metrics_names[0]} of {scores[0]}; {model.metrics_names[1]} of {scores[1] * 100}%')
+        loss_per_fold.append(test_acc[0])
+        acc_per_fold.append(test_acc[1] * 100)
+    return loss_per_fold, acc_per_fold
+
+
+
