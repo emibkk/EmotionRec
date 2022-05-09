@@ -67,7 +67,7 @@ def resnet_model():
     pretrained_model = tf.keras.applications.ResNet50(weights='imagenet', include_top=False,
                      input_tensor=Input(shape=(48, 48, 3)))
 
-    for layer in model.layers:
+    for layer in pretrained_model.layers:
         layer.trainable = False
 
     model.add(pretrained_model)
