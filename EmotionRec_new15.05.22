@@ -1,0 +1,517 @@
+########### Installing Dependencies ##############
+# Libraries for linear algebra, data processing, data plotting
+import pandas as pd
+import numpy as np
+import matplotlib
+matplotlib.use("TkAgg")
+import matplotlib.pyplot as plt
+from keras.utils.vis_utils import plot_model
+import os
+os.environ["PATH"] += os.pathsep + 'C:/Program Files/Graphviz/bin/'
+import gc
+from datetime import datetime as dt
+
+# Libraries for tensorflow
+import tensorflow as tf
+import tensorflow_addons as tfa
+from tensorflow import keras
+from tensorflow.keras import layers
+from tensorflow.python.keras import regularizers
+from tensorflow.keras.callbacks import ReduceLROnPlateau, ModelCheckpoint, EarlyStopping
+
+# Libraries using sklearn
+from sklearn.metrics import confusion_matrix, classification_report, ConfusionMatrixDisplay
+from sklearn.model_selection import KFold
+
+# Libraries using keras
+from keras.utils import np_utils
+from keras.models import Sequential
+from keras.layers import *
+from keras.layers import Dense, Dropout, Activation, Flatten
+from keras.layers import Conv2D, MaxPooling2D, BatchNormalization , Input ,concatenate
+from keras.losses import categorical_crossentropy,categorical_hinge,hinge,squared_hinge
+from keras.models import Model
+from keras.regularizers import l2
+from keras.callbacks import  EarlyStopping, ModelCheckpoint
+from keras.preprocessing.image import ImageDataGenerator
+
+####################### Preparing data ######################
+# Create path to dataset
+path='C:/data3/fer2013.csv'
+# Load the dataset
+data=pd.read_csv(path)
+# Look at 5 first rows and corresponding columns
+print(data.head())
+# More about the dataset
+print(data['Usage'].value_counts())
+
+# Defining the emotions
+lab = ['Angry', 'Disgust', 'Fear', 'Happy', 'Sad', 'Surprise', 'Neural']
+lab_no = [0,1,2,3,4,5,6]
+emotions = {0: 'Angry', 1: 'Disgust', 2: 'Fear', 3: 'Happy', 4: 'Sad', 5: 'Surprise', 6: 'Neutral'}
+labels_num = data['emotion'].value_counts()
+la_num = [labels_num[i] for i in range(len(labels_num))]
+
+####################### Training, Testing and Validation Split ######################
+# Define train images to be the ones under 'Usage' Training
+train_data = data.loc[data.Usage=="Training"] #80%
+# Define validation images to be the ones under 'Usage' PublicTest
+val_data = data.loc[data.Usage=="PublicTest"] #10%
+# Define test images to be the ones under 'Usage' PrivateTest
+test_data = data.loc[data.Usage=="PrivateTest"] #10%
+
+# Combining validation and test data to be test dataset. This means a 80% train and 20% test set
+test_data = pd.concat([test_data,val_data]) #20%
+
+################## Data pre-processing ############################
+# Convert images to an nparray and 32-bit floating number. Extract only data, without labels
+X_train = np.array(list(map(str.split, train_data.pixels)), np.float32)
+X_test = np.array(list(map(str.split, test_data.pixels)), np.float32)
+
+# Converting to One-hot encoding
+X_train = X_train.reshape(X_train.shape[0], 48, 48, 1)
+X_test = X_test.reshape(X_test.shape[0], 48, 48, 1)
+
+# Normalizing
+X_train=X_train/255 # Can also be called train images, without corresponding labels
+X_test=X_test/255 # Can also be called test images, without corresponding labels
+
+# Extracting only labels not containing data
+y_train = train_data.emotion # Can also be called train labels, without corresponding data
+y_test = test_data.emotion # Can also be called test labels, without corresponding data
+
+# Converiting to One-hot encoding
+y_train = np_utils.to_categorical(y_train, 7)
+y_test = np_utils.to_categorical(y_test, 7)
+
+# Look at the final formatted data
+print(f"X_train shape: {X_train.shape} - y_train shape: {y_train.shape}")
+print(f"X_test shape: {X_test.shape} - y_test shape: {y_test.shape}")
+
+############ Example images from dataset for each emotion ############
+def plot_emotions():
+    fig, axis = plt.subplots(1, 7, figsize=(8, 3)) # create figure box
+    fig.subplots_adjust(hspace = .2, wspace=.2) #make spaces between each image shown
+    axis = axis.ravel() #create a contiguous flattened array
+    for j in range(7): #loop through each of the 7 emotions and show the image
+        number = data[data['emotion']==j].index[j]
+        axis[j].imshow(X_train[number][:,:,0], cmap='gray')
+        axis[j].set_title(emotions[y_train[number].argmax()])
+        axis[j].set_xticklabels([])
+        axis[j].set_yticklabels([])
+    plt.show()
+
+############ Show distribution of each emotion in a piechart ############
+def develop_piechart():
+    "Function that plots the distribution of train, test, valid and emotional count in piechart"
+    # Plot first Piechart
+    # Develop piechart of distribution of usage Training, PublicTest, PrivateTest
+    sets = data['Usage'].value_counts()
+    da = [sets[i] for i in range(len(sets))]
+    set_la = ['Training', 'PublicTest', 'PrivateTest']
+
+    plt.figure(0)
+    plt.pie(x=da, labels=set_la, autopct='%3.1f %%', startangle=90)
+    plt.title('Size of Training, PublicTest, PrivateTest in dataset')
+    plt.axis('equal')  # Equal aspect ratio ensures that pie is drawn as a circle
+
+    # Plot second Piechart
+    # Develop piechart of distribution of each emotion
+    plt.figure(1)
+    plt.pie(x=la_num, labels=lab, autopct='%3.1f %%', startangle=90)
+    plt.title('Size of each emotion in dataset')
+    plt.axis('equal')  # Equal aspect ratio ensures that pie is drawn as a circle
+
+    # Show both Piecharts
+    plt.show()
+
+def plot_bar():
+    "Function that plots the distribution of image amount for each emotional category"
+    plt.bar(range(len(la_num)), la_num, tick_label=lab)
+    for a, b in zip(lab_no, la_num):
+        plt.text(a, b + 0.05, '%.0f' % b, ha='center', va='bottom', fontsize=10)
+    plt.title('Size of each emotion in whole dataset')
+    plt.show()
+
+# More about the dataset, call on functions
+#plot_emotions()
+#develop_piechart()
+#plot_bar()
+
+################## Callbacks function ########################
+lrd = ReduceLROnPlateau(monitor='val_loss', patience=20, verbose=1, factor=0.50, min_lr=1e-10)
+
+mcp = ModelCheckpoint('model.h5')
+
+es = EarlyStopping(verbose=1, patience=20)
+
+############### Define metrics to be logged when fitting model #################
+METRICS = [
+    tf.keras.metrics.BinaryAccuracy(name='accuracy'),
+    tf.keras.metrics.Precision(name='precision'),
+    tf.keras.metrics.Recall(name='recall'),
+    tf.keras.metrics.AUC(name='auc'),
+    tfa.metrics.F1Score(num_classes=7, name='f1_score', average='macro'),
+]
+
+def Train_Val_Plot(acc, val_acc, loss, val_loss):
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, 5))
+    fig.suptitle(f'Models metric visualization fold no {fold_no}')
+
+    # First subplot Accuracy
+    ax1.plot(range(1, len(acc) + 1), acc)
+    ax1.plot(range(1, len(val_acc) + 1), val_acc)
+    ax1.set_title('History of Accuracy')
+    ax1.set_xlabel('Epochs')
+    ax1.set_ylabel('Accuracy')
+    ax1.legend(['Training', 'Validation'])
+
+    # Second subplot Loss
+    ax2.plot(range(1, len(loss) + 1), loss)
+    ax2.plot(range(1, len(val_loss) + 1), val_loss)
+    ax2.set_title('History of Loss')
+    ax2.set_xlabel('Epochs')
+    ax2.set_ylabel('Loss')
+    ax2.legend(['Training', 'Validation'])
+
+    # Create spaces between each subplot
+    plt.tight_layout()
+
+    # Show all subplots
+    plt.show()
+
+#from: https://www.kaggle.com/code/yasserhessein/emotion-recognition-with-resnet50
+def Train_Val_Plot_All(auc, val_auc, recall, val_recall, precision, val_precision, f1, val_f1):
+    fig, (ax1, ax2, ax3, ax4) = plt.subplots(1, 4, figsize=(12, 5))
+    fig.suptitle(f'Models metric visualization fold no {fold_no}')
+
+    # First subplot AUC
+    ax1.plot(range(1, len(auc) + 1), auc)
+    ax1.plot(range(1, len(val_auc) + 1), val_auc)
+    ax1.set_title('History of AUC')
+    ax1.set_xlabel('Epochs')
+    ax1.set_ylabel('AUC')
+    ax1.legend(['Training', 'Validation'])
+
+    # Second subplot Recall
+    ax2.plot(range(1, len(recall) + 1), recall)
+    ax2.plot(range(1, len(val_recall) + 1), val_recall)
+    ax2.set_title('History of Recall')
+    ax2.set_xlabel('Epochs')
+    ax2.set_ylabel('Recall')
+    ax2.legend(['Training', 'Validation'])
+
+    # Third subplot Precision
+    ax3.plot(range(1, len(precision) + 1), precision)
+    ax3.plot(range(1, len(val_precision) + 1), val_precision)
+    ax3.set_title('History of Precision')
+    ax3.set_xlabel('Epochs')
+    ax3.set_ylabel('Precision')
+    ax3.legend(['Training', 'Validation'])
+
+    # Fourth subplot F1 score
+    ax4.plot(range(1, len(f1) + 1), f1)
+    ax4.plot(range(1, len(val_f1) + 1), val_f1)
+    ax4.set_title('History of F1-score')
+    ax4.set_xlabel('Epochs')
+    ax4.set_ylabel('F1 score')
+    ax4.legend(['Training', 'Validation'])
+
+    # Create spaces between each subplot
+    plt.tight_layout()
+
+    # Show all subplots
+    plt.show()
+
+def resnet_model():
+    #from: https://chroniclesofai.com/transfer-learning-with-keras-resnet-50/
+    img_input = Input(shape=(48, 48, 1))
+    img_conc = Concatenate()([img_input, img_input, img_input])
+
+    pretrained_model = tf.keras.applications.ResNet50(weights='imagenet', include_top=False,
+                     input_tensor=img_conc)
+
+    for layer in pretrained_model.layers:
+        layer.trainable = False
+
+    model = Sequential()
+    model.add(pretrained_model)
+    model.add(Flatten())
+    model.add(Dense(1024, activation='relu')) #var 512
+    model.add(Dense(7, activation='softmax'))
+
+    model.summary()
+    plot_model(model, to_file='resnet_model.png', show_shapes=True, show_layer_names=True)
+
+    model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=METRICS)
+    return model
+
+def VGG_model():
+    #from: https://www.kaggle.com/code/o1anuraganand/emotion-model-vgg16-transfer-learning-training
+    #and from https://www.learndatasci.com/tutorials/hands-on-transfer-learning-keras/
+    # Loading the vgg16 model
+    from keras.applications.vgg16 import VGG16
+    # VGG model must recieve 3 channel data. Resizing 48x48x1 to 48x48x3
+    img_input = Input(shape=(48, 48, 1))
+    img_conc = Concatenate()([img_input, img_input, img_input])
+    base_model = VGG16(include_top=False, weights="imagenet", input_tensor=img_conc , classes=7)
+    base_model.trainable = False
+
+    # Create a new 'top' of the model (i.e. fully-connected layers).
+    # This is 'bootstrapping' a new top_model onto the pretrained layers.
+    #model = Sequential()
+    #model.add(base_model)
+    #model.add(Flatten())
+    #model.add(Dense(4096, activation='relu'))
+    #model.add(Dense(1072, activation='relu'))
+    #model.add(Dropout(0.2))
+    #model.add(Dense(7, activation='softmax'))
+
+    #model.summary()
+
+    #top_model = Sequential()
+    top_model = base_model.output
+    top_model = Flatten(name="flatten")(top_model)
+    top_model = Dense(4096, activation='relu')(top_model)
+    top_model = Dense(1072, activation='relu')(top_model)
+    top_model = Dropout(0.2)(top_model)
+    output_layer = Dense(7, activation='softmax')(top_model)
+
+    model = Model(inputs=base_model.input, outputs=output_layer)
+    # summarize the model
+    model.summary()
+    plot_model(model, to_file='VGG_model.png', show_shapes=True, show_layer_names=True)
+
+    # Compiles the model for training.
+    model.compile(optimizer='sgd',
+                  loss='categorical_crossentropy',
+                  metrics=METRICS)
+    return model
+
+def Sequential_model():
+    model = Sequential()
+    model.add(Conv2D(32, kernel_size=(3, 3), padding='same', activation='relu', input_shape=(48, 48, 1)))
+    model.add(Conv2D(64, kernel_size=(3, 3), activation='relu', padding='same'))
+    model.add(BatchNormalization())
+    model.add(MaxPooling2D(pool_size=(2, 2)))
+    model.add(Dropout(0.25))
+
+    model.add(
+        Conv2D(128, kernel_size=(3, 3), activation='relu', padding='same', kernel_regularizer=regularizers.l2(0.01)))
+    model.add(BatchNormalization())
+    model.add(MaxPooling2D(pool_size=(2, 2)))
+    model.add(Dropout(0.25))
+
+    model.add(Conv2D(256, kernel_size=(3, 3), activation='relu', kernel_regularizer=regularizers.l2(0.01)))
+    model.add(BatchNormalization())
+    model.add(MaxPooling2D(pool_size=(2, 2)))
+    model.add(Dropout(0.25))
+
+    model.add(Flatten())
+    model.add(Dense(512, activation='relu'))
+    model.add(Dropout(0.5))
+
+    model.add(Dense(7, activation='softmax'))
+
+    # Display the model's architecture and summarize model.
+    model.summary()
+
+    plot_model(model, to_file='Sequential_model.png', show_shapes=True, show_layer_names=True)
+
+    model.compile(optimizer='adam',
+                  loss='categorical_crossentropy',
+                  metrics=METRICS)
+    return model
+
+
+# Define per-fold score containers
+acc_per_fold = []
+loss_per_fold = []
+predicted_targets_per_fold = []
+actual_targets_per_fold = []
+cm_holder = []
+total_time= []
+
+# Merge inputs and targets to use the whole dataset for kfold split
+inputs = np.concatenate((X_train, X_test), axis=0) #100% dataset is used
+targets = np.concatenate((y_train, y_test), axis=0) #100% dataset is used
+
+# Define the K-fold Cross Validator
+kfold = KFold(n_splits=10, shuffle=True)
+
+# K-fold Cross Validation model evaluation
+fold_no = 1
+for train, test in kfold.split(inputs, targets):
+    model = resnet_model() #call on Sequential_model(), resnet_model() or VGG_model()
+
+    # Generate a print
+    print('------------------------------------------------------------------------')
+    print(f'Training for fold {fold_no} ...')
+
+    #steps_per_epoch = train_dataset.n // train_dataset.batch_size
+    #validation_steps = valid_dataset.n // valid_dataset.batch_size
+
+    # Fit data to model
+    history = model.fit(x=inputs[train], y=targets[train],
+                        batch_size=32,
+                        callbacks=[lrd, mcp, es],
+                        epochs=20,
+                        validation_data=(inputs[test], targets[test]),
+                        verbose=1)
+
+    # Generate metrics
+    #Train_Val_Plot(history.history['accuracy'], history.history['val_accuracy'],
+    #               history.history['loss'], history.history['val_loss']
+    #               )
+
+
+    #Train_Val_Plot_All(history.history['auc'], history.history['val_auc'],
+    #                   history.history['recall'], history.history['val_recall'],
+    #                   history.history['precision'], history.history['val_precision'],
+    #                   history.history['f1_score'], history.history['val_f1_score']
+    #                   )
+
+    # Evaluate model on test set
+    scores = model.evaluate(inputs[test], targets[test], verbose=0)
+
+    # Print model accuracy and loss on test set
+    print(
+        f'Score for fold {fold_no}: {model.metrics_names[0]} of {scores[0]}; {model.metrics_names[1]} of {scores[1] * 100}%')
+
+    #Save scores in lists
+    loss_per_fold.append(scores[0])
+    acc_per_fold.append(scores[1] * 100)
+
+    # Take time model uses on prediction
+    start = dt.now()
+
+    # Predict on test set
+    results = model.predict(inputs[test], batch_size=128)
+    predicted_classes = np.argmax(results, axis=1)
+    y_classes = np.argmax(targets[test], axis=1)
+
+    # Stop time
+    running_secs = (dt.now() - start).seconds
+    total_time.append(running_secs)
+
+    # Save scores in lists
+    predicted_targets_per_fold.append(predicted_classes)
+    actual_targets_per_fold.append(y_classes)
+
+    # Create confusion matrix per fold
+    cm = confusion_matrix(y_classes, predicted_classes, normalize='true')
+    disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=lab)
+    #disp.plot()
+    #disp.ax_.set_title(f'Confusion Matrix fold no {fold_no}')
+    #plt.show()
+
+    # Save confusion matrix in a list
+    cm_holder.append(cm)
+
+    # Save model weights and model. Uncomment for the corresponding model loaded
+    model.save_weights('Opt_Resnet_bestweight.h5')
+    model.save('Opt_Resnet_bestmodel.h5')
+    #model.save_weights('VGG_bestweight.h5')
+    #model.save('VGG_bestmodel.h5')
+    #model.save_weights('Seq_bestweight.h5')
+    #model.save('Seq_bestmodel.h5')
+
+    # Delete model so that I can start a new one for the next fold. If not it would run on top of each other
+    del model
+    gc.collect()
+
+    # Increase fold number
+    fold_no = fold_no + 1
+
+
+######### Accuracy and Loss per fold ########
+print('------------------------------------------------------------------------')
+print('Score per fold')
+for i in range(0, len(acc_per_fold)):
+    print('------------------------------------------------------------------------')
+    print(f'> Fold {i + 1} - Loss: {loss_per_fold[i]} - Accuracy: {acc_per_fold[i]}%')
+    print('------------------------------------------------------------------------')
+
+######### Average Accuracy and Loss for all folds ########
+print('Average scores for all folds:')
+print(f'> Accuracy: {np.mean(acc_per_fold)} (+- {np.std(acc_per_fold)})')
+print(f'> Loss: {np.mean(loss_per_fold)}')
+print('------------------------------------------------------------------------')
+
+############# Classification Report for last fold(?) ############
+print('Classification Report')
+print(classification_report(y_classes, predicted_classes, target_names=lab))
+
+
+############## Print average Confusion Matrix for all folds ##############
+mean_time = np.mean(total_time)
+print(f'Mean time for predictions on all folds: {mean_time} seconds')
+
+mean_of_conf_matrix_arrays = np.mean(cm_holder, axis=0)
+average_disp = ConfusionMatrixDisplay(confusion_matrix=mean_of_conf_matrix_arrays, display_labels=lab)
+average_disp.plot()
+average_disp.ax_.set_title("Average Confusion Matrix")
+# Show matrix
+plt.show()
+from PIL import Image
+import numpy
+from tensorflow.keras.preprocessing import image
+
+image1 = 'C:/Users/EBK006/PycharmProjects/EmotionRec/venv/happy.jpg'
+image2 = 'C:/Users/EBK006/PycharmProjects/EmotionRec/venv/disgust.jpg'
+image3 = 'C:/Users/EBK006/PycharmProjects/EmotionRec/venv/anger.png'
+
+img1_show = image.load_img(image1, color_mode="grayscale")
+img2_show = image.load_img(image2, color_mode="grayscale")
+img3_show = image.load_img(image3, color_mode="grayscale")
+
+img1_label = 'happy'
+img2_label = 'sad'
+img3_label = 'anger'
+
+img1 = image.load_img(image1, target_size=(48, 48), color_mode="grayscale")
+img2 = image.load_img(image2, target_size=(48, 48), color_mode="grayscale")
+img3 = image.load_img(image3, target_size=(48, 48), color_mode="grayscale")
+
+img1_array = image.img_to_array(img1)
+img2_array = image.img_to_array(img2)
+img3_array = image.img_to_array(img3)
+
+img1_batch = np.expand_dims(img1_array, axis=0)
+img2_batch = np.expand_dims(img2_array, axis=0)
+img3_batch = np.expand_dims(img3_array, axis=0)
+
+img1_batch = img1_batch/255
+img2_batch = img2_batch/255
+#img3_batch = img3_batch/255
+
+# Look at one images shape and type after pre-processing
+print(img1_batch.shape)
+print(img1_batch.dtype)
+
+modelVGG = keras.models.load_model('C:/Users/EBK006/PycharmProjects/EmotionRec/venv/VGG_bestmodel.h5')
+modelRes = keras.models.load_model('C:/Users/EBK006/PycharmProjects/EmotionRec/venv/Opt_Resnet_bestmodel.h5')
+modelSeq = keras.models.load_model('C:/Users/EBK006/PycharmProjects/EmotionRec/venv/Seq_bestmodel.h5')
+
+pred1_test = list(modelVGG.predict(img1_batch))
+pred2_test = list(modelVGG.predict(img2_batch))
+pred3_test = list(modelVGG.predict(img3_batch))
+
+def plot_image_and_emotion(img_show, img_label, pred_test):
+    """ Function to plot the image and compare the prediction results with the label """
+
+    fig, axs = plt.subplots(1, 2, figsize=(12, 6), sharey=False)
+
+    bar_label = lab
+
+    axs[0].imshow(img_show, 'gray')
+    axs[0].set_title(img_label)
+
+    axs[1].bar(bar_label, pred_test[0], color='orange', alpha=0.7)
+    axs[1].grid()
+
+    plt.show()
+
+plot_image_and_emotion(img1_show, img1_label, pred1_test)
+plot_image_and_emotion(img2_show, img2_label, pred2_test)
+plot_image_and_emotion(img3_show, img3_label, pred3_test)
